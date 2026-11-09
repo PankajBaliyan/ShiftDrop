@@ -23,3 +23,8 @@ vcpkg_installed/
 
 # Packaging
 *.zip
+.DS_Store
+.build/
+
+# Local Mac notes (not tracked)
+shiftdrop-macos/test-docs/
