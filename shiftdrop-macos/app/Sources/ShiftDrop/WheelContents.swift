@@ -72,7 +72,7 @@ enum WheelContents {
                 var slice = WheelSlice(id: r.id, label: r.label, detail: r.detail, icon: r.icon)
                 if r.steps.first?.action.hasPrefix("media.") == true, FfmpegEngine.shared.path == nil {
                     slice.enabled = false
-                    slice.detail = "Needs FFmpeg: brew install ffmpeg"   // dimmed, with the reason in the centre
+                    slice.detail = "FFmpeg is missing from this build"   // dimmed, with the reason in the centre
                 }
                 if s.key == "reduce", let p = r.steps.first?.params["percent"] as? Int, total > 0 {
                     slice.headline = ByteCountFormatter.string(fromByteCount: Int64(total * p / 100), countStyle: .file)

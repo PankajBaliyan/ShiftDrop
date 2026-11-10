@@ -48,7 +48,8 @@ enum Subtitles {
 enum Sheets {
     static func parse(_ text: String, delimiter: Character) -> [[String]] {
         var rows: [[String]] = [], row: [String] = [], field = "", quoted = false
-        let chars = Array(text.replacingOccurrences(of: "\u{FEFF}", with: ""))
+        // Swift counts "\r\n" as one Character, so line ends are made "\n" first (else CRLF files, Excel's, never split into rows).
+        let chars = Array(text.replacingOccurrences(of: "\u{FEFF}", with: "").replacingOccurrences(of: "\r\n", with: "\n"))
         var i = 0
         while i < chars.count {
             let c = chars[i]

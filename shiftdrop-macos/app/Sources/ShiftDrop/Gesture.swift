@@ -8,7 +8,10 @@ import CoreGraphics
 /// count moves when a drag session starts, and it holds file URLs for a Finder drag. That is the same way
 /// Dropzone and Yoink notice drags. Shift while that is true shows the probe.
 ///
-/// Needs Input Monitoring permission (listen-only tap). It never changes or blocks events.
+/// Needs Input Monitoring permission. While the wheel is shown, its navigation keys (Tab, arrows, [ ] `, 1-9, Esc)
+/// are swallowed so the app in front doesn't also get them; that needs an active tap, which macOS gates behind
+/// Accessibility. Without it the tap falls back to listen-only (the keys then reach the app in front too).
+/// Mouse, scroll and modifier events are never changed or blocked.
 final class Gesture {
     var onShow: ((NSPoint) -> Void)?
     var onMouseUp: (() -> Void)?
@@ -26,21 +29,34 @@ final class Gesture {
     private(set) var eventCount = 0
     private(set) var dragCount = 0
 
+    /// Diagnostics, printed in debug builds only.
+    #if DEBUG
     var log: (String) -> Void = { print($0) }
+    #else
+    var log: (String) -> Void = { _ in }
+    #endif
+    /// True when the tap can swallow keys (Accessibility granted); false when it fell back to listen-only.
+    private(set) var canSwallowKeys = false
+    private var swallowedKeys = Set<Int>()
 
     /// False when the tap could not be created (permission missing).
     func start() -> Bool {
-        let types: [CGEventType] = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .flagsChanged, .scrollWheel, .keyDown]
+        let types: [CGEventType] = [.leftMouseDown, .leftMouseUp, .leftMouseDragged, .flagsChanged, .scrollWheel, .keyDown, .keyUp]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
-            Unmanaged<Gesture>.fromOpaque(refcon).takeUnretainedValue().handle(type, event)
-            return Unmanaged.passUnretained(event)
+            let swallow = Unmanaged<Gesture>.fromOpaque(refcon).takeUnretainedValue().handle(type, event)
+            return swallow ? nil : Unmanaged.passUnretained(event)
         }
-        guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
-                                          eventsOfInterest: mask, callback: callback, userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            return false
+        let info = Unmanaged.passUnretained(self).toOpaque()
+        var created = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                        eventsOfInterest: mask, callback: callback, userInfo: info)
+        canSwallowKeys = created != nil
+        if created == nil {
+            created = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
+                                        eventsOfInterest: mask, callback: callback, userInfo: info)
         }
+        guard let tap = created else { return false }
         self.tap = tap
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
@@ -54,7 +70,8 @@ final class Gesture {
         pb.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
     }
 
-    fileprivate func handle(_ type: CGEventType, _ event: CGEvent) {
+    /// Returns true when the event must not reach the app in front.
+    fileprivate func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
         eventCount += 1
         if type == .leftMouseDragged { dragCount += 1 }
         switch type {
@@ -100,41 +117,47 @@ final class Gesture {
             scrollAccum += delta
             let threshold = continuous ? 25.0 : 1.0
             let now = CACurrentMediaTime()
-            log("scroll delta=\(delta) continuous=\(continuous) accum=\(scrollAccum)")
             if abs(scrollAccum) >= threshold && (now - lastScrollTime) > 0.20 {
                 onScroll?(scrollAccum > 0 ? -1 : 1)
                 scrollAccum = 0
                 lastScrollTime = now
             }
+        case .keyUp:
+            // The key-up of a swallowed key goes too, so the app in front never sees half a keystroke.
+            if swallowedKeys.remove(Int(event.getIntegerValueField(.keyboardEventKeycode))) != nil { return true }
         case .keyDown:
-            // Allow keyboard navigation while wheel is shown (with or without Shift)
             guard isWheelShown() else { break }
             let code = Int(event.getIntegerValueField(.keyboardEventKeycode))
             // Direct ring selection 1..9 (Carbon keycodes: 18, 19, 20, 21, 23, 22, 26, 28, 25)
-            let directKeys: [Int: Int] = [
-                18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8
-            ]
+            let directKeys: [Int: Int] = [18: 0, 19: 1, 20: 2, 21: 3, 23: 4, 22: 5, 26: 6, 28: 7, 25: 8]
             if let ring = directKeys[code] {
                 onSelectRing?(ring)
-                break
+                return swallow(code)
             }
-            // Step navigation forward: Tab (48), Right Arrow (124), Down Arrow (125), Right Bracket ']' (30)
+            // Forward: Tab (48), Right (124), Down (125), ']' (30)
             if code == 48 || code == 124 || code == 125 || code == 30 {
                 onScroll?(1)
-                break
+                return swallow(code)
             }
-            // Step navigation backward: Left Arrow (123), Up Arrow (126), Left Bracket '[' (33), Grave/Tilde '`' (50)
+            // Backward: Left (123), Up (126), '[' (33), '`' (50)
             if code == 123 || code == 126 || code == 33 || code == 50 {
                 onScroll?(-1)
-                break
+                return swallow(code)
             }
-            // Escape (53): cancel / hide the wheel
+            // Escape (53): hide the wheel
             if code == 53 {
                 onCancel?()
-                break
+                return swallow(code)
             }
         default: break
         }
+        return false
+    }
+
+    private func swallow(_ code: Int) -> Bool {
+        guard canSwallowKeys else { return false }
+        swallowedKeys.insert(code)
+        return true
     }
 
     private func considerShowing(shift: Bool) {

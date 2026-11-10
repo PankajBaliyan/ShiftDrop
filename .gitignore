@@ -28,3 +28,6 @@ vcpkg_installed/
 
 # Local Mac notes (not tracked)
 shiftdrop-macos/test-docs/
+
+# Engines built from source by shiftdrop-macos/scripts (libwebp, ffmpeg)
+shiftdrop-macos/app/vendor/

@@ -15,12 +15,14 @@ final class FfmpegEngine {
 
     private init() { path = Self.locate() }
 
-    /// $SHIFTDROP_FFMPEG (development), the app bundle's Resources/engines/ffmpeg, then Homebrew.
+    /// The app bundle's Resources/engines/ffmpeg (ShiftDrop's own LGPL build, see scripts/build-ffmpeg-macos.sh),
+    /// or, in debug builds only, $SHIFTDROP_FFMPEG. Never a Homebrew or system ffmpeg: those may be GPL builds.
     static func locate() -> String? {
         var candidates: [String] = []
-        if let env = ProcessInfo.processInfo.environment["SHIFTDROP_FFMPEG"] { candidates.append(env) }
         if let res = Bundle.main.resourcePath { candidates.append(res + "/engines/ffmpeg") }
-        candidates += ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+        #if DEBUG
+        if let env = ProcessInfo.processInfo.environment["SHIFTDROP_FFMPEG"] { candidates.append(env) }   // debug builds only
+        #endif
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
@@ -118,7 +120,7 @@ enum MediaJob {
     /// renamed to the first free "name (suffix).ext" (a rename never replaces an existing file).
     static func run(_ recipe: Recipe, source: URL, progress: @escaping (Double) -> Void, isCancelled: @escaping () -> Bool) throws -> URL {
         let engine = FfmpegEngine.shared
-        guard engine.path != nil else { throw PipelineError("FFmpeg isn\u{2019}t installed (brew install ffmpeg)") }
+        guard engine.path != nil else { throw PipelineError("FFmpeg is missing from the app (run scripts/build-engines.sh, then build_app.sh)") }
         guard let step = recipe.steps.first else { throw PipelineError("Empty recipe") }
         let info = engine.probe(source)
         if isCancelled() { throw CancelledError() }
